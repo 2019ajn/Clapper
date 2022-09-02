@@ -1,0 +1,151 @@
+                   	<meta charset="utf-8" emacsmode="-*- markdown -*">
+                            **6.08 Clapper Design Exercise Writeup**
+                            James Nguyen
+                            April 11, 2021
+Demonstration
+===============================================================================
+[Youtube link here](https://youtu.be/w8TPCs_yKTw)
+Specifications
+===============================================================================
+Display
+-------------------------------------------------------------------------------
+- A clap is any noise that is 0.04 V greater than the previous reading so it is taking the difference between the previous and current signal value instead of using a threshold.
+- Two claps that are no less than 0.25 seconds and no more than 1 second apart will toggle the LCD on and off.
+
+A running average filter function is applied to the raw data being read from the microphone connected to pin A0 in order to maintian the persistent signal and remove the erratic signals.
+
+Code Appendix
+===============================================================================
+
+Running Average Filter
+-------------------------------------------------------------------------------
+```````````````````````````````````````````````
+float averaging_filter(float input, float* stored_values, int order, int* index){
+    stored_values[*index] = input;
+    float output = 0;
+    float multiplier = 1.0/(order+1);
+    for (int i=0; i<=order; i++) {
+          output += stored_values[i];
+    } 
+    (*index)+=1;
+    (*index)%=(order+1);
+    return multiplier*output;
+}
+```````````````````````````````````````````````
+Main File
+-------------------------------------------------------------------------------
+```````````````````````````````````````````````
+#include <SPI.h>
+#include <TFT_eSPI.h>
+TFT_eSPI tft = TFT_eSPI();
+
+const int UPDATE_PERIOD = 20;
+const uint8_t PIN_1 = 5; //button 1
+const uint8_t PIN_2 = 0; //button 2
+const uint8_t LCD_PIN = 25; //pin we use for software PWM
+uint32_t primary_timer;
+float sample_rate = 2000; //Hz
+float sample_period = (int)(1e6 / sample_rate);
+const uint8_t SCREEN_YMAX = 159;
+
+int render_counter;
+double raw_reading;
+double scaled_reading_for_lcd;
+double old_old_scaled_reading_for_serial = 0;
+double old_scaled_reading_for_serial = 0;
+double scaled_reading_for_serial;
+
+// States for lcd_fsm
+uint8_t state;
+const uint8_t FIRST = 0;
+const uint8_t SECOND = 1;
+const uint8_t SWITCH = 2;
+
+// Variables for averaging_filter
+float values1[50];
+int index1 = 0;
+
+int color = 0; // used to switch lcd screen
+uint32_t timer;
+uint32_t timer_2 = 0;
+const int lower = 250; // lower millisecond bound for reading second clap
+const int upper = 1000; // upper millisecond bound for reading second clap
+
+void setup() {
+  Serial.begin(115200); // Set up serial port
+  pinMode(PIN_1, INPUT_PULLUP);
+  pinMode(LCD_PIN, OUTPUT);
+  primary_timer = micros();
+  render_counter = 0;
+  tft.init();  //init screen
+  tft.setRotation(2); //adjust rotation
+  tft.setTextSize(1); //default font size
+  tft.fillScreen(TFT_WHITE); //fill background
+  tft.setTextColor(TFT_PURPLE, TFT_WHITE); //set col
+  state = FIRST;
+}
+
+void loop() {
+  render_counter++;
+  if (render_counter % UPDATE_PERIOD == 0) {
+    raw_reading = averaging_filter(analogRead(A0), values1, 20, &index1);
+    scaled_reading_for_lcd = raw_reading * SCREEN_YMAX/(pow(2,12));
+    scaled_reading_for_serial = abs(raw_reading * 3.3 / 4096-1.23);
+    lcd_fsm(scaled_reading_for_serial);
+    old_scaled_reading_for_serial = scaled_reading_for_serial;
+    old_old_scaled_reading_for_serial = old_scaled_reading_for_serial;
+  }
+  while (micros() > primary_timer && micros() - primary_timer < sample_period); //prevents rollover glitch every 71 minutes...not super needed
+  primary_timer = micros();
+}
+
+void lcd_fsm(double reading) {
+  switch(state) {
+    case FIRST:
+      Serial.println(reading);
+      if (millis() - timer_2 > 200 && reading > old_scaled_reading_for_serial + 0.03) {
+        timer = millis();
+        state = SECOND;
+      }
+      break;
+    case SECOND:
+      if (millis() - timer >= upper) {
+        timer_2 = millis();
+        state = FIRST;
+      } else if (millis() - timer < lower && reading > old_scaled_reading_for_serial + 0.06) {
+        timer_2 = millis();
+        state = FIRST;
+      } else if (millis() - timer > lower && millis() - timer < upper && reading > old_scaled_reading_for_serial + 0.03)  {
+        state = SWITCH;
+      }
+      break;
+    case SWITCH:
+      color = ( color + 1 ) % 2;
+      if (color == 0) {
+        digitalWrite(LCD_PIN,0);
+      } else {
+        digitalWrite(LCD_PIN,1);
+      }
+      timer_2 = millis();
+      state = FIRST;
+      break;
+  }
+}
+
+float averaging_filter(float input, float* stored_values, int order, int* index){
+    stored_values[*index] = input;
+    float output = 0;
+    float multiplier = 1.0/(order+1);
+    for (int i=0; i<=order; i++) {
+          output += stored_values[i];
+    } 
+    (*index)+=1;
+    (*index)%=(order+1);
+    return multiplier*output;
+}
+```````````````````````````````````````````````
+
+
+
+<!-- Markdeep: --><style class="fallback">body{visibility:hidden;white-space:pre;font-family:monospace}</style><script src="markdeep.min.js" charset="utf-8"></script><script src="https://morgan3d.github.io/markdeep/latest/markdeep.min.js?" charset="utf-8"></script><script>window.alreadyProcessedMarkdeep||(document.body.style.visibility="visible")</script>
+
